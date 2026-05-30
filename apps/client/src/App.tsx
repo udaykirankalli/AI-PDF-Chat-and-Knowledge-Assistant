@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
   FileText,
   Loader2,
   LockKeyhole,
   LogOut,
   MessageSquareText,
   ShieldCheck,
-  Sparkles
+  Trash2,
+  Upload
 } from "lucide-react";
-import { authApi, type AuthUser } from "./lib/api";
+import { authApi, documentApi, type AuthUser, type PdfDocument } from "./lib/api";
 import { clearSession, readSession, saveSession } from "./lib/session";
 
 type AuthMode = "login" | "signup";
@@ -25,6 +29,11 @@ export function App() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [documents, setDocuments] = useState<PdfDocument[]>([]);
+  const [isDocumentsLoading, setIsDocumentsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadMessage, setUploadMessage] = useState("");
 
   const title = mode === "signup" ? "Create your workspace" : "Welcome back";
   const submitLabel = mode === "signup" ? "Create account" : "Sign in";
@@ -48,6 +57,17 @@ export function App() {
       setToken("");
     });
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !user) return;
+
+    setIsDocumentsLoading(true);
+    documentApi
+      .list(token)
+      .then((response) => setDocuments(response.documents))
+      .catch((error) => setUploadMessage(error instanceof Error ? error.message : "Could not load documents"))
+      .finally(() => setIsDocumentsLoading(false));
+  }, [token, user]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,6 +96,46 @@ export function App() {
     setUser(null);
     setToken("");
     setMode("login");
+  }
+
+  async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file || !token) return;
+
+    if (file.type !== "application/pdf") {
+      setUploadMessage("Please choose a PDF file");
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+    setUploadMessage("");
+
+    try {
+      const response = await documentApi.upload(token, file, setUploadProgress);
+      setDocuments((current) => [response.document, ...current]);
+      setUploadMessage("PDF uploaded. It is ready for the ingestion pipeline.");
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Upload failed");
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function handleRemove(documentId: string) {
+    if (!token) return;
+
+    const previousDocuments = documents;
+    setDocuments((current) => current.filter((document) => document.id !== documentId));
+
+    try {
+      await documentApi.remove(token, documentId);
+    } catch (error) {
+      setDocuments(previousDocuments);
+      setUploadMessage(error instanceof Error ? error.message : "Could not delete document");
+    }
   }
 
   if (user) {
@@ -125,25 +185,83 @@ export function App() {
               </div>
             </aside>
 
-            <section className="grid gap-5 xl:grid-cols-[1fr_360px]">
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
                 <div className="mb-6 flex items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-coral">Next build slice</p>
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-coral">Documents</p>
                     <h2 className="mt-2 text-2xl font-semibold">Upload and manage PDFs</h2>
                   </div>
-                  <Sparkles className="text-jade" />
+                  <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5">
+                    {isUploading ? <Loader2 className="animate-spin" size={17} /> : <Upload size={17} />}
+                    Upload
+                    <input className="sr-only" type="file" accept="application/pdf" onChange={handleUpload} disabled={isUploading} />
+                  </label>
                 </div>
-                <div className="grid min-h-[320px] place-items-center rounded-lg border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-center">
-                  <div className="max-w-md">
-                    <FileText className="mx-auto mb-4 text-jade" size={36} />
-                    <h3 className="text-lg font-semibold">Document ingestion comes next</h3>
-                    <p className="mt-2 text-sm leading-6 text-neutral-600">
-                      The dashboard is ready for the upload flow. Next we will add document metadata,
-                      progress states, and the first server endpoint for PDF files.
-                    </p>
+
+                {isUploading && (
+                  <div className="mb-4 rounded-lg border border-black/10 bg-[#fbfaf7] p-3">
+                    <div className="mb-2 flex items-center justify-between text-sm">
+                      <span className="font-medium">Uploading PDF</span>
+                      <span className="text-neutral-600">{uploadProgress}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-mist">
+                      <div className="h-2 rounded-full bg-jade transition-all" style={{ width: `${uploadProgress}%` }} />
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {uploadMessage && (
+                  <p className="mb-4 rounded-lg border border-black/10 bg-[#fbfaf7] px-3 py-2 text-sm text-neutral-700">
+                    {uploadMessage}
+                  </p>
+                )}
+
+                {isDocumentsLoading ? (
+                  <div className="grid min-h-[320px] place-items-center rounded-lg border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-center">
+                    <Loader2 className="mb-4 animate-spin text-jade" size={34} />
+                    <p className="font-medium">Loading your documents</p>
+                  </div>
+                ) : documents.length === 0 ? (
+                  <div className="grid min-h-[320px] place-items-center rounded-lg border border-dashed border-black/20 bg-[#fbfaf7] p-6 text-center">
+                    <div className="max-w-md">
+                      <FileText className="mx-auto mb-4 text-jade" size={36} />
+                      <h3 className="text-lg font-semibold">No PDFs uploaded yet</h3>
+                      <p className="mt-2 text-sm leading-6 text-neutral-600">
+                        Upload a document to begin the RAG workflow. The next step will extract text,
+                        chunk pages, and index embeddings in Qdrant.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {documents.map((document) => (
+                      <article
+                        key={document.id}
+                        className="flex flex-col gap-4 rounded-lg border border-black/10 bg-[#fbfaf7] p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <FileText className="shrink-0 text-jade" size={18} />
+                            <h3 className="truncate font-semibold">{document.title}</h3>
+                            <StatusBadge status={document.status} />
+                          </div>
+                          <p className="truncate text-sm text-neutral-600">{document.originalName}</p>
+                          <p className="mt-1 text-xs text-neutral-500">
+                            {formatBytes(document.size)} · {document.pageCount} pages · {document.chunkCount} chunks
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleRemove(document.id)}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-black/10 bg-white px-3 text-sm font-medium text-neutral-700 transition hover:border-red-200 hover:text-red-700"
+                        >
+                          <Trash2 size={15} />
+                          Delete
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="rounded-lg border border-black/10 bg-ink p-5 text-white shadow-soft">
@@ -279,6 +397,46 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function StatusBadge({ status }: { status: PdfDocument["status"] }) {
+  const statusStyles = {
+    uploaded: {
+      icon: Clock3,
+      label: "Uploaded",
+      className: "bg-coral/15 text-coral"
+    },
+    processing: {
+      icon: Loader2,
+      label: "Processing",
+      className: "bg-white/10 text-neutral-700"
+    },
+    indexed: {
+      icon: CheckCircle2,
+      label: "Indexed",
+      className: "bg-jade/15 text-jade"
+    },
+    failed: {
+      icon: AlertTriangle,
+      label: "Failed",
+      className: "bg-red-50 text-red-700"
+    }
+  };
+  const item = statusStyles[status];
+  const Icon = item.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${item.className}`}>
+      <Icon size={13} className={status === "processing" ? "animate-spin" : ""} />
+      {item.label}
+    </span>
+  );
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function Feature({
