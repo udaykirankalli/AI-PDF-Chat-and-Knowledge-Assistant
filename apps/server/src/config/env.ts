@@ -8,6 +8,8 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(24),
   QDRANT_URL: z.string().url().default("http://localhost:6333"),
   QDRANT_COLLECTION: z.string().default("pdf_chunks"),
+  EMBEDDING_DIMENSIONS: z.coerce.number().default(1536),
+  OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   REDIS_URL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional()
 });

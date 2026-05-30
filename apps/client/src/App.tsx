@@ -61,13 +61,20 @@ export function App() {
   useEffect(() => {
     if (!token || !user) return;
 
-    setIsDocumentsLoading(true);
-    documentApi
-      .list(token)
-      .then((response) => setDocuments(response.documents))
-      .catch((error) => setUploadMessage(error instanceof Error ? error.message : "Could not load documents"))
-      .finally(() => setIsDocumentsLoading(false));
+    loadDocuments();
   }, [token, user]);
+
+  useEffect(() => {
+    if (!token || documents.every((document) => document.status !== "processing")) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadDocuments(false);
+    }, 2500);
+
+    return () => window.clearInterval(intervalId);
+  }, [documents, token]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -98,6 +105,25 @@ export function App() {
     setMode("login");
   }
 
+  async function loadDocuments(showLoading = true) {
+    if (!token) return;
+
+    if (showLoading) {
+      setIsDocumentsLoading(true);
+    }
+
+    try {
+      const response = await documentApi.list(token);
+      setDocuments(response.documents);
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : "Could not load documents");
+    } finally {
+      if (showLoading) {
+        setIsDocumentsLoading(false);
+      }
+    }
+  }
+
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -116,7 +142,7 @@ export function App() {
     try {
       const response = await documentApi.upload(token, file, setUploadProgress);
       setDocuments((current) => [response.document, ...current]);
-      setUploadMessage("PDF uploaded. It is ready for the ingestion pipeline.");
+      setUploadMessage("PDF uploaded. Text extraction and vector indexing are running now.");
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : "Upload failed");
     } finally {
@@ -250,6 +276,9 @@ export function App() {
                           <p className="mt-1 text-xs text-neutral-500">
                             {formatBytes(document.size)} · {document.pageCount} pages · {document.chunkCount} chunks
                           </p>
+                          {document.errorMessage && (
+                            <p className="mt-2 text-xs font-medium text-red-700">{document.errorMessage}</p>
+                          )}
                         </div>
                         <button
                           onClick={() => handleRemove(document.id)}

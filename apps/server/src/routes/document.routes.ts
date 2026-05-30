@@ -5,6 +5,8 @@ import { Router, type NextFunction, type Response } from "express";
 import multer from "multer";
 import { requireAuth, type AuthenticatedRequest } from "../middleware/auth.middleware.js";
 import { Document } from "../models/document.model.js";
+import { processDocument } from "../services/ingestion.service.js";
+import { deleteDocumentVectors } from "../services/vector-store.service.js";
 
 const uploadRoot = path.resolve(process.cwd(), "uploads");
 
@@ -74,8 +76,10 @@ documentRouter.post("/", handlePdfUpload, async (req: AuthenticatedRequest, res,
       storagePath: req.file.path,
       mimeType: req.file.mimetype,
       size: req.file.size,
-      status: "uploaded"
+      status: "processing"
     });
+
+    void processDocument(String(document._id));
 
     res.status(201).json({
       document: toPublicDocument(document)
@@ -98,6 +102,7 @@ documentRouter.delete("/:documentId", async (req: AuthenticatedRequest, res, nex
     }
 
     await Document.deleteOne({ _id: document._id });
+    await deleteDocumentVectors(String(document._id)).catch(() => undefined);
     await fs.unlink(document.storagePath).catch(() => undefined);
 
     res.status(204).send();
