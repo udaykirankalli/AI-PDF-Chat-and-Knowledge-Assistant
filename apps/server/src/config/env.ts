@@ -10,6 +10,7 @@ const envSchema = z.object({
   QDRANT_COLLECTION: z.string().default("pdf_chunks"),
   EMBEDDING_DIMENSIONS: z.coerce.number().default(1536),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  OPENAI_CHAT_MODEL: z.string().default("gpt-4o-mini"),
   REDIS_URL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional()
 });

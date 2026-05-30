@@ -19,6 +19,28 @@ export type PdfDocument = {
   updatedAt: string;
 };
 
+export type Citation = {
+  documentId: string;
+  title: string;
+  chunkIndex: number;
+  score: number;
+};
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  citations: Citation[];
+  createdAt?: string;
+};
+
+export type ChatSession = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 type AuthResponse = {
   token: string;
   user: AuthUser;
@@ -108,5 +130,83 @@ export const documentApi = {
         Authorization: `Bearer ${token}`
       }
     });
+  }
+};
+
+export const chatApi = {
+  listSessions(token: string) {
+    return request<{ sessions: ChatSession[] }>("/chat/sessions", {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+  },
+  async streamAnswer({
+    token,
+    sessionId,
+    question,
+    onSession,
+    onCitations,
+    onToken
+  }: {
+    token: string;
+    sessionId?: string;
+    question: string;
+    onSession: (session: { sessionId: string; title: string }) => void;
+    onCitations: (citations: Citation[]) => void;
+    onToken: (token: string) => void;
+  }) {
+    const response = await fetch(`${API_URL}/chat/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ sessionId, question })
+    });
+
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message ?? "Chat request failed");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const eventText of events) {
+        const eventName = eventText.match(/^event: (.+)$/m)?.[1];
+        const dataText = eventText.match(/^data: (.+)$/m)?.[1];
+
+        if (!eventName || !dataText) {
+          continue;
+        }
+
+        const data = JSON.parse(dataText);
+
+        if (eventName === "session") {
+          onSession(data);
+        }
+
+        if (eventName === "citations") {
+          onCitations(data.citations);
+        }
+
+        if (eventName === "token") {
+          onToken(data.token);
+        }
+      }
+    }
   }
 };

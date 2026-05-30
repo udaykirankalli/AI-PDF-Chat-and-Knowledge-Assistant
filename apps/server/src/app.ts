@@ -4,6 +4,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
 import { authRouter } from "./routes/auth.routes.js";
+import { chatRouter } from "./routes/chat.routes.js";
 import { documentRouter } from "./routes/document.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
 
@@ -23,6 +24,7 @@ export function createApp() {
   app.use("/api/health", healthRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/documents", documentRouter);
+  app.use("/api/chat", chatRouter);
 
   app.use((_req, res) => {
     res.status(404).json({

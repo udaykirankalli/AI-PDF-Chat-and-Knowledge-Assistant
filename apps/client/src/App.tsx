@@ -9,11 +9,22 @@ import {
   LockKeyhole,
   LogOut,
   MessageSquareText,
+  Plus,
+  Send,
   ShieldCheck,
   Trash2,
   Upload
 } from "lucide-react";
-import { authApi, documentApi, type AuthUser, type PdfDocument } from "./lib/api";
+import {
+  authApi,
+  chatApi,
+  documentApi,
+  type AuthUser,
+  type ChatMessage,
+  type ChatSession,
+  type Citation,
+  type PdfDocument
+} from "./lib/api";
 import { clearSession, readSession, saveSession } from "./lib/session";
 
 type AuthMode = "login" | "signup";
@@ -34,6 +45,12 @@ export function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadMessage, setUploadMessage] = useState("");
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [question, setQuestion] = useState("");
+  const [isAnswering, setIsAnswering] = useState(false);
+  const [chatError, setChatError] = useState("");
 
   const title = mode === "signup" ? "Create your workspace" : "Welcome back";
   const submitLabel = mode === "signup" ? "Create account" : "Sign in";
@@ -62,6 +79,7 @@ export function App() {
     if (!token || !user) return;
 
     loadDocuments();
+    loadChatSessions();
   }, [token, user]);
 
   useEffect(() => {
@@ -121,6 +139,100 @@ export function App() {
       if (showLoading) {
         setIsDocumentsLoading(false);
       }
+    }
+  }
+
+  async function loadChatSessions() {
+    if (!token) return;
+
+    try {
+      const response = await chatApi.listSessions(token);
+      setChatSessions(response.sessions);
+
+      if (!activeSessionId && response.sessions[0]) {
+        setActiveSessionId(response.sessions[0].id);
+        setChatMessages(response.sessions[0].messages);
+      }
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not load conversations");
+    }
+  }
+
+  function startNewChat() {
+    setActiveSessionId("");
+    setChatMessages([]);
+    setChatError("");
+  }
+
+  function openSession(session: ChatSession) {
+    setActiveSessionId(session.id);
+    setChatMessages(session.messages);
+    setChatError("");
+  }
+
+  async function handleAsk(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!token || !question.trim() || isAnswering) {
+      return;
+    }
+
+    const currentQuestion = question.trim();
+    setQuestion("");
+    setChatError("");
+    setIsAnswering(true);
+
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: currentQuestion,
+      citations: []
+    };
+    const assistantMessage: ChatMessage = {
+      role: "assistant",
+      content: "",
+      citations: []
+    };
+
+    setChatMessages((current) => [...current, userMessage, assistantMessage]);
+
+    try {
+      await chatApi.streamAnswer({
+        token,
+        sessionId: activeSessionId || undefined,
+        question: currentQuestion,
+        onSession: (session) => {
+          setActiveSessionId(session.sessionId);
+          setChatSessions((current) => {
+            if (current.some((item) => item.id === session.sessionId)) {
+              return current;
+            }
+
+            return [
+              {
+                id: session.sessionId,
+                title: session.title,
+                messages: [userMessage],
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              },
+              ...current
+            ];
+          });
+        },
+        onCitations: (citations) => {
+          setChatMessages((current) => updateLastAssistant(current, "", citations));
+        },
+        onToken: (answerToken) => {
+          setChatMessages((current) => updateLastAssistant(current, answerToken));
+        }
+      });
+
+      await loadChatSessions();
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Could not generate an answer");
+      setChatMessages((current) => current.slice(0, -2));
+    } finally {
+      setIsAnswering(false);
     }
   }
 
@@ -209,9 +321,34 @@ export function App() {
                   </button>
                 ))}
               </div>
+              <div className="mt-5 border-t border-black/10 pt-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-semibold">Recent chats</p>
+                  <button
+                    onClick={startNewChat}
+                    className="grid h-8 w-8 place-items-center rounded-lg border border-black/10 transition hover:bg-mist"
+                    title="New chat"
+                  >
+                    <Plus size={15} />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {chatSessions.slice(0, 4).map((session) => (
+                    <button
+                      key={session.id}
+                      onClick={() => openSession(session)}
+                      className={`w-full truncate rounded-lg px-3 py-2 text-left text-sm transition ${
+                        activeSessionId === session.id ? "bg-mist font-semibold" : "hover:bg-mist"
+                      }`}
+                    >
+                      {session.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </aside>
 
-            <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <section className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(360px,1fr)]">
               <div className="rounded-lg border border-black/10 bg-white p-5 shadow-soft">
                 <div className="mb-6 flex items-center justify-between gap-4">
                   <div>
@@ -274,7 +411,7 @@ export function App() {
                           </div>
                           <p className="truncate text-sm text-neutral-600">{document.originalName}</p>
                           <p className="mt-1 text-xs text-neutral-500">
-                            {formatBytes(document.size)} · {document.pageCount} pages · {document.chunkCount} chunks
+                            {formatBytes(document.size)} | {document.pageCount} pages | {document.chunkCount} chunks
                           </p>
                           {document.errorMessage && (
                             <p className="mt-2 text-xs font-medium text-red-700">{document.errorMessage}</p>
@@ -293,19 +430,63 @@ export function App() {
                 )}
               </div>
 
-              <div className="rounded-lg border border-black/10 bg-ink p-5 text-white shadow-soft">
-                <MessageSquareText className="mb-4 text-coral" />
-                <h2 className="text-xl font-semibold">RAG pipeline</h2>
-                <div className="mt-5 space-y-3">
-                  {pipelineSteps.map((step, index) => (
-                    <div key={step} className="flex items-center gap-3">
-                      <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10 text-xs">
-                        {index + 1}
-                      </span>
-                      <span className="text-sm text-white/85">{step}</span>
+              <div className="flex min-h-[560px] flex-col rounded-lg border border-black/10 bg-ink p-5 text-white shadow-soft">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-coral">Chat</p>
+                    <h2 className="mt-2 text-xl font-semibold">Ask your PDFs</h2>
+                  </div>
+                  <MessageSquareText className="text-coral" />
+                </div>
+
+                <div className="mb-4 grid gap-2">
+                  {pipelineSteps.slice(2).map((step, index) => (
+                    <div key={step} className="flex items-center gap-2 text-xs text-white/70">
+                      <span className="grid h-5 w-5 place-items-center rounded-full bg-white/10">{index + 3}</span>
+                      {step}
                     </div>
                   ))}
                 </div>
+
+                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg bg-white/7 p-3">
+                  {chatMessages.length === 0 ? (
+                    <div className="grid h-full min-h-[260px] place-items-center text-center">
+                      <div>
+                        <MessageSquareText className="mx-auto mb-3 text-coral" size={34} />
+                        <p className="font-semibold">Ask after a PDF is indexed</p>
+                        <p className="mt-2 text-sm leading-6 text-white/65">
+                          Answers are generated only after semantic retrieval from your uploaded documents.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    chatMessages.map((chatMessage, index) => (
+                      <ChatBubble key={`${chatMessage.role}-${index}`} message={chatMessage} />
+                    ))
+                  )}
+                </div>
+
+                {chatError && (
+                  <p className="mt-3 rounded-lg border border-red-300/30 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+                    {chatError}
+                  </p>
+                )}
+
+                <form onSubmit={handleAsk} className="mt-4 flex gap-2">
+                  <input
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    className="h-11 min-w-0 flex-1 rounded-lg border border-white/10 bg-white px-3 text-sm text-ink outline-none transition focus:border-coral"
+                    placeholder="Ask a question from your PDFs"
+                    disabled={isAnswering}
+                  />
+                  <button
+                    disabled={isAnswering || !question.trim()}
+                    className="inline-flex h-11 items-center justify-center rounded-lg bg-coral px-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isAnswering ? <Loader2 className="animate-spin" size={17} /> : <Send size={17} />}
+                  </button>
+                </form>
               </div>
             </section>
           </div>
@@ -426,6 +607,53 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === "user";
+
+  return (
+    <article className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[92%] rounded-lg px-3 py-2 text-sm leading-6 ${
+          isUser ? "bg-coral text-white" : "bg-white text-ink"
+        }`}
+      >
+        <p className="whitespace-pre-wrap">{message.content || "Thinking..."}</p>
+        {!isUser && message.citations.length > 0 && <CitationList citations={message.citations} />}
+      </div>
+    </article>
+  );
+}
+
+function CitationList({ citations }: { citations: Citation[] }) {
+  return (
+    <div className="mt-3 space-y-1 border-t border-black/10 pt-2">
+      {citations.slice(0, 4).map((citation, index) => (
+        <p key={`${citation.documentId}-${citation.chunkIndex}`} className="text-xs text-neutral-600">
+          [{index + 1}] {citation.title}, chunk {citation.chunkIndex + 1}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function updateLastAssistant(messages: ChatMessage[], token = "", citations?: Citation[]) {
+  const next = [...messages];
+  const lastAssistantIndex = [...next].reverse().findIndex((message) => message.role === "assistant");
+
+  if (lastAssistantIndex === -1) {
+    return messages;
+  }
+
+  const index = next.length - 1 - lastAssistantIndex;
+  next[index] = {
+    ...next[index],
+    content: next[index].content + token,
+    citations: citations ?? next[index].citations
+  };
+
+  return next;
 }
 
 function StatusBadge({ status }: { status: PdfDocument["status"] }) {
